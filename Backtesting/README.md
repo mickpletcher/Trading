@@ -1,4 +1,4 @@
-## 1. BACKTESTER — `backtest.py`
+## BACKTESTER — `backtest.py`
 
 Tests trading strategies against real historical data before risking money.
 
