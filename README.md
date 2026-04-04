@@ -53,6 +53,7 @@ Why it is still not the same as live trading:
 
 | Module | Purpose | Typical User | Main Outputs |
 | --- | --- | --- | --- |
+| `src/` | Pure PowerShell module suite for Alpaca Trading API and Market Data API. Modular, testable, paper-only. Replaces `Alpaca/alpaca_paper.ps1` for serious PS usage. | PowerShell engineers and automation workflows | account objects, order results, position objects, trade update events, bar/quote/trade data, risk state JSON |
 | `Alpaca/` | Paper trading commands, connectivity tests, and safety checks | New users and operators | account status, quotes, orders, circuit breaker logs |
 | `Backtesting/` | Historical strategy testing and live strategy runners | Learners and strategy developers | trade summaries, journal CSV rows, live logs |
 | `Journal/` | Trade review, analytics, CSV export, and HTML reporting | Anyone reviewing results | `trades.db`, `trade_journal.csv`, `report.html` |
@@ -118,11 +119,54 @@ Trading/
 |   |-- requirements.txt        # Executor dependencies
 |-- Tests/
 |   |-- README.md               # Test guide and interpretation help
-|   |-- test_connection.py      # Live Alpaca connectivity checks using .env credentials
+|   |-- test_connection.py      # Live Alpaca connectivity checks using .env credentials (Python)
 |   |-- test_ema_crossover.py   # Synthetic tests for EMA strategy logic
 |   |-- test_bollinger_rsi.py   # Synthetic tests for Bollinger plus RSI logic
 |   |-- test_gap_momentum.py    # Synthetic tests for intraday gap logic
 |   |-- test_rsi_stack.py       # Synthetic tests for multi timeframe RSI logic
+|-- src/
+|   |-- Alpaca.Config/
+|   |   |-- Alpaca.Config.psm1          # .env loader, URL constants, paper-mode enforcer
+|   |   |-- Alpaca.Config.psd1          # Module manifest
+|   |-- Alpaca.Auth/
+|   |   |-- Alpaca.Auth.psm1            # Auth headers, Invoke-AlpacaRequest wrapper, Write-AlpacaLog
+|   |   |-- Alpaca.Auth.psd1
+|   |-- Alpaca.Trading.Account/
+|   |   |-- Alpaca.Trading.Account.psm1 # Get-AlpacaAccount, Get-AlpacaClock, Get-AlpacaCalendar
+|   |   |-- Alpaca.Trading.Account.psd1
+|   |-- Alpaca.Trading.Assets/
+|   |   |-- Alpaca.Trading.Assets.psm1  # Get-AlpacaAsset, Get-AlpacaAssets
+|   |   |-- Alpaca.Trading.Assets.psd1
+|   |-- Alpaca.Trading.Orders/
+|   |   |-- Alpaca.Trading.Orders.psm1  # Submit-AlpacaOrder, Get-AlpacaOrder(s), Remove-AlpacaOrder(s)
+|   |   |-- Alpaca.Trading.Orders.psd1
+|   |-- Alpaca.Trading.Positions/
+|   |   |-- Alpaca.Trading.Positions.psm1 # Get-AlpacaPosition(s), Close-AlpacaPosition, Close-AllAlpacaPositions
+|   |   |-- Alpaca.Trading.Positions.psd1
+|   |-- Alpaca.Streams.TradeUpdates/
+|   |   |-- Alpaca.Streams.TradeUpdates.psm1 # Start-AlpacaTradeUpdateStream (WebSocket, primary order state)
+|   |   |-- Alpaca.Streams.TradeUpdates.psd1
+|   |-- Alpaca.MarketData.Historical/
+|   |   |-- Alpaca.MarketData.Historical.psm1 # Get-AlpacaBars, Get-AlpacaLatestBar/Quote/Trade/Snapshot
+|   |   |-- Alpaca.MarketData.Historical.psd1
+|   |-- Alpaca.MarketData.Stream/
+|   |   |-- Alpaca.MarketData.Stream.psm1 # Start-AlpacaMarketDataStream (WebSocket, trades/quotes/bars)
+|   |   |-- Alpaca.MarketData.Stream.psd1
+|   |-- Alpaca.Risk/
+|   |   |-- Alpaca.Risk.psm1            # Kill switch, daily loss, duplicate prevention, order validation
+|   |   |-- Alpaca.Risk.psd1
+|-- examples/
+|   |-- Get-AccountStatus.ps1           # Account status and clock via PowerShell modules
+|   |-- Submit-PaperOrder.ps1           # Risk-gated paper order template
+|   |-- Start-TradeUpdateStream.ps1     # Live trade_updates WebSocket with console output
+|   |-- Get-HistoricalBars.ps1          # Historical bar pull with summary stats
+|   |-- Connect-FakepacaStream.ps1      # FAKEPACA smoke test for market data stream
+|-- tests/
+|   |-- Test-AlpacaConfig.Tests.ps1     # Pester tests: config loading and paper-mode enforcement
+|   |-- Test-AlpacaAuth.Tests.ps1       # Pester tests: auth headers and request wrapper
+|   |-- Test-AlpacaRisk.Tests.ps1       # Pester tests: kill switch, daily loss, duplicate prevention
+|   |-- Test-AlpacaTradeUpdateParsing.Tests.ps1 # Pester tests: trade update event parsing
+|   |-- Test-AlpacaMarketDataParsing.Tests.ps1  # Pester tests: market data frame parsing
 ```
 
 ## Architecture and Workflow
@@ -523,6 +567,94 @@ What a skipped test means:
 - a skip usually means the test intentionally did not run because required Alpaca credentials were not present
 - a skip is not the same as a failure
 - a failure means the test ran and found a real problem
+
+## PowerShell Module Suite (src)
+
+The `src/` folder contains a modular PowerShell implementation for Alpaca paper trading and market data. Use this for production style PowerShell automation.
+
+### Scope
+
+Supported:
+
+- Trading API (paper account, assets, orders, positions)
+- Trading WebSocket (`trade_updates`) for primary order lifecycle state
+- Market Data REST (historical bars and latest endpoints)
+- Market Data WebSocket (trades, quotes, bars)
+- Risk controls (kill switch, daily loss cap, duplicate prevention)
+
+Not supported by design:
+
+- live trading
+- Broker API
+- Connect API
+- FIX protocol
+
+### Paper Trading Configuration
+
+Set credentials in `.env` at repo root:
+
+```dotenv
+ALPACA_API_KEY=your_paper_key
+ALPACA_SECRET_KEY=your_paper_secret
+```
+
+Then initialize config:
+
+```powershell
+Import-Module .\src\Alpaca.Config\Alpaca.Config.psd1 -Force
+Initialize-AlpacaConfig
+```
+
+The modules lock to the paper endpoint and enforce paper only mode through `Assert-PaperMode` before state mutating calls.
+
+### Security and Key Handling
+
+- Keep `.env` local only and never commit secrets
+- Use paper keys only
+- Rotate keys in Alpaca if you suspect exposure
+
+### Account and Order Smoke Checks
+
+```powershell
+pwsh -NoProfile -File .\examples\Get-AccountStatus.ps1
+pwsh -NoProfile -File .\examples\Submit-PaperOrder.ps1 -Symbol AAPL -Qty 1 -Side buy
+```
+
+### Trade Updates Stream
+
+Use stream events as the primary order state source:
+
+```powershell
+pwsh -NoProfile -File .\examples\Start-TradeUpdateStream.ps1
+```
+
+### Historical Market Data
+
+```powershell
+pwsh -NoProfile -File .\examples\Get-HistoricalBars.ps1 -Symbol SPY -Days 30 -Timeframe 1Day
+```
+
+### FAKEPACA Streaming Test
+
+```powershell
+pwsh -NoProfile -File .\examples\Connect-FakepacaStream.ps1
+```
+
+### Safety Controls
+
+- Paper mode lock in `Alpaca.Config`
+- Risk gate in `Alpaca.Risk` via `Test-AlpacaOrderRisk`
+- Kill switch files in `Journal/alpaca_risk_state.json` and `Journal/alpaca_kill_switch.lock`
+
+### Module Tests (Pester)
+
+```powershell
+Invoke-Pester .\tests\Test-AlpacaConfig.Tests.ps1 -Output Detailed
+Invoke-Pester .\tests\Test-AlpacaAuth.Tests.ps1 -Output Detailed
+Invoke-Pester .\tests\Test-AlpacaRisk.Tests.ps1 -Output Detailed
+Invoke-Pester .\tests\Test-AlpacaTradeUpdateParsing.Tests.ps1 -Output Detailed
+Invoke-Pester .\tests\Test-AlpacaMarketDataParsing.Tests.ps1 -Output Detailed
+```
 
 ## Common Errors and Fixes
 
